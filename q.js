@@ -162,13 +162,16 @@ function defer() {
     // forward to the resolved promise.  We coerce the resolution value to a
     // promise using the ref promise because it handles both fully
     // resolved values and other promises gracefully.
-    var pending = [], value;
+    var pending = [], onProgress = [], value;
 
     var deferred = create(defer.prototype);
     var promise = create(makePromise.prototype);
 
-    promise.promiseSend = function () {
+    promise.promiseSend = function (op, resolve, reject, progress) {
         var args = slice.call(arguments);
+        if (op === "when" && pending && progress) {
+            onProgress.push(progress);
+        }
         if (pending) {
             pending.push(args);
         } else {
@@ -196,6 +199,7 @@ function defer() {
             });
         }, void 0);
         pending = void 0;
+        onProgress = void 0;
         return value;
     }
 
@@ -203,6 +207,15 @@ function defer() {
     deferred.resolve = become;
     deferred.reject = function (exception) {
         return become(reject(exception));
+    };
+    deferred.progress = function (progress, estimate) {
+        if (pending) {
+            onProgress.forEach(function (onProgress) {
+                nextTick(function () {
+                    onProgress(progress, estimate);
+                });
+            });
+        }
     };
 
     return deferred;
@@ -250,7 +263,7 @@ exports.makePromise = makePromise;
 function makePromise(descriptor, fallback, valueOf, rejected) {
     if (fallback === void 0) {
         fallback = function (op) {
-            return reject("Promise does not support operation: " + op);
+            return reject(new Error("Promise does not support operation: " + op));
         };
     }
 
@@ -283,8 +296,12 @@ function makePromise(descriptor, fallback, valueOf, rejected) {
 }
 
 // provide thenables, CommonJS/Promises/A
-makePromise.prototype.then = function (fulfilled, rejected) {
-    return when(this, fulfilled, rejected);
+makePromise.prototype.then = function (fulfilled, rejected, progress) {
+    return when(this, fulfilled, rejected, progress);
+};
+
+makePromise.prototype.progress = function (progress) {
+    return when(this, void 0, void 0, progress);
 };
 
 // Chainable methods
@@ -541,24 +558,37 @@ function view(object) {
  * @return promise for the return value from the invoked callback
  */
 exports.when = when;
-function when(value, fulfilled, rejected) {
-    var deferred = defer();
-    var done = false;   // ensure the untrusted promise makes at most a
-                        // single call to one of the callbacks
+function when(value, fulfilled, rejected, progress) {
+    var done = false; // ensure the untrusted promise makes at most a
+                      // single call to one of the callbacks
+    var deferred = defer(function () {
+        done = true;
+    });
+    var start = +new Date();
 
     function _fulfilled(value) {
+        var stop = +new Date();
         try {
-            return fulfilled ? fulfilled(value) : value;
+            return fulfilled ? fulfilled(value, stop - start) : value;
         } catch (exception) {
             return reject(exception);
         }
     }
 
     function _rejected(exception) {
+        var stop = +new Date();
         try {
-            return rejected ? rejected(exception) : reject(exception);
+            return rejected ? rejected(exception, stop - start) : reject(exception);
         } catch (exception) {
             return reject(exception);
+        }
+    }
+
+    function _progress(ratio) {
+        var stop = +new Date();
+        var time = stop - start;
+        if (progress) {
+            progress(ratio, time);
         }
     }
 
@@ -570,7 +600,11 @@ function when(value, fulfilled, rejected) {
             done = true;
             deferred.resolve(
                 resolve(value)
-                .promiseSend("when", _fulfilled, _rejected)
+                .promiseSend(
+                    "when",
+                    _fulfilled,
+                    _rejected
+                )
             );
         }, function (exception) {
             if (done) {
@@ -578,17 +612,17 @@ function when(value, fulfilled, rejected) {
             }
             done = true;
             deferred.resolve(_rejected(exception));
-        });
+        }, _progress);
     });
 
     return deferred.promise;
 }
 
 exports.spread = spread;
-function spread(promise, fulfilled, rejected) {
+function spread(promise, fulfilled, rejected, progress) {
     return when(promise, function (values) {
         return fulfilled.apply(void 0, values);
-    }, rejected);
+    }, rejected, progress);
 }
 
 /**
@@ -810,11 +844,11 @@ exports.keys = sender("keys");
 exports.all = all;
 function all(promises) {
     return when(promises, function (promises) {
+        var deferred = defer();
         var countDown = promises.length;
         if (countDown === 0) {
             return resolve(promises);
         }
-        var deferred = defer();
         reduce.call(promises, function (undefined, promise, index) {
             when(promise, function (value) {
                 promises[index] = value;
