@@ -299,7 +299,8 @@ reduce.call(
         "all", "allResolved",
         "view", "viewInfo",
         "timeout", "delay",
-        "catch", "finally", "fail", "fin", "end"
+        "catch", "finally", "fail", "fin", "end",
+        "to"
     ],
     function (prev, name) {
         makePromise.prototype[name] = function () {
@@ -893,6 +894,11 @@ function end(promise) {
             throw error;
         });
     });
+}
+
+exports.to = to;
+function to(promise, wrap) {
+    return wrap(promise);
 }
 
 /**
