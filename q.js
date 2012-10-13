@@ -943,6 +943,11 @@ function when(value, fulfilled, rejected, progressed) {
         }
     }
 
+    function _progressed(value) {
+        var result = progressed ? progressed(value) : value;
+        return result === undefined ? value : result;
+    }
+
     var resolvedValue = resolve(value);
     nextTick(function () {
         resolvedValue.promiseSend("when", function (value) {
@@ -962,13 +967,11 @@ function when(value, fulfilled, rejected, progressed) {
         });
     });
 
-    // Progress listeners need to be attached in the current tick.
-    if (progressed) {
-        resolvedValue.promiseSend("when", void 0, void 0, progressed);
-    }
-
-    // Propagate progress from the original promise to the returned one.
-    resolvedValue.promiseSend("when", void 0, void 0, deferred.notify);
+    // Progress propagator need to be attached in the current tick.
+    resolvedValue.promiseSend("when", void 0, void 0, function (value) {
+        var v = _progressed(value);
+        deferred.notify(v);
+    });
 
     return deferred.promise;
 }
